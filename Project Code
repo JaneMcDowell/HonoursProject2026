@@ -1,0 +1,2004 @@
+###### COOPERATION & PAYOFF STATS - 3 MODELS NO STRATEGIES
+
+library(dplyr)
+library(lme4)
+library(emmeans)
+library(ggplot2)
+
+citation("lme4")
+citation("emmeans")
+citation("blme")
+# Build analysis dataset
+df2 <- exp3 %>%
+  mutate(
+    cooperate = if_else(tolower(move) == "cooperate", 1, 0),
+    
+    focal_model = case_when(
+      agent_id == "Adaptive_0_0" ~ model_1,
+      agent_id == "Adaptive_1_0" ~ model_2,
+      TRUE ~ NA_character_
+    ),
+    
+    opponent_model = case_when(
+      agent_id == "Adaptive_0_0" ~ model_2,
+      agent_id == "Adaptive_1_0" ~ model_1,
+      TRUE ~ NA_character_
+    ),
+    
+    focal_model = factor(focal_model, levels = c("4.1", "Mini", "Nano")),
+    opponent_model = factor(opponent_model, levels = c("4.1", "Mini", "Nano")),
+    pairing_id = factor(pairing_id)
+  ) %>%
+  filter(!is.na(focal_model), !is.na(opponent_model))
+
+
+#### PAYOFF #######
+
+library(dplyr)
+library(lme4)
+
+
+df <- df2 %>%
+  distinct(
+    interaction, pairing_id, round, agent_id, move,
+    model_1, model_2, payoff_agent_1, payoff_agent_2
+  ) %>%
+  mutate(
+    focal_model = if_else(agent_id == "Adaptive_0_0", model_1, model_2),
+    opponent_model = if_else(agent_id == "Adaptive_0_0", model_2, model_1),
+    cooperate = if_else(tolower(move) == "cooperate", 1, 0),
+    payoff = if_else(agent_id == "Adaptive_0_0", payoff_agent_1, payoff_agent_2),
+    pairing_uid = paste(interaction, pairing_id, sep = "_")
+  )
+
+
+
+m_payoff_models <- lmer(
+  payoff ~ focal_model * opponent_model + scale(round) + (1 | pairing_uid),
+  data = df
+)
+
+drop1(m_payoff_models, test = "Chisq")
+summary(m_payoff_models)
+anova(m_payoff_models)
+
+
+###### COOPERATION ########
+
+df2 <- exp3 %>%
+  mutate(
+    cooperate = if_else(tolower(move) == "cooperate", 1, 0),
+    
+    focal_model = case_when(
+      agent_id == "Adaptive_0_0" ~ model_1,
+      agent_id == "Adaptive_1_0" ~ model_2,
+      TRUE ~ NA_character_
+    ),
+    
+    opponent_model = case_when(
+      agent_id == "Adaptive_0_0" ~ model_2,
+      agent_id == "Adaptive_1_0" ~ model_1,
+      TRUE ~ NA_character_
+    ),
+    
+    focal_model = factor(focal_model, levels = c("4.1", "Mini", "Nano")),
+    opponent_model = factor(opponent_model, levels = c("4.1", "Mini", "Nano")),
+    
+    game_id = interaction(interaction, pairing_id, drop = TRUE)
+  ) %>%
+  filter(!is.na(focal_model), !is.na(opponent_model))
+
+
+
+m_add <- glmer(
+  cooperate ~ focal_model + opponent_model + scale(round) + (1 | game_id),
+  data = df2,
+  family = binomial,
+  control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+)
+
+summary(m_add)
+
+
+
+
+
+########## STRATEGY INTERACTIONS ##############
+
+################# M I N I ###############################
+
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(readr)
+
+
+# Reshape to long format: one row per strategy per round
+df_long <- exp2_mini %>%
+  mutate(pair_uid = interaction(test, pairing_id, drop = TRUE)) %>%
+  transmute(
+    test,
+    pair_uid,
+    pairing_id,
+    round,
+    
+    focal_strategy_1 = strategy_1,
+    opponent_strategy_1 = strategy_2,
+    move_1 = move_strategy_1,
+    payoff_1 = payoff_strategy_1,
+    
+    focal_strategy_2 = strategy_2,
+    opponent_strategy_2 = strategy_1,
+    move_2 = move_strategy_2,
+    payoff_2 = payoff_strategy_2
+  ) %>%
+  pivot_longer(
+    cols = c(focal_strategy_1, opponent_strategy_1, move_1, payoff_1,
+             focal_strategy_2, opponent_strategy_2, move_2, payoff_2),
+    names_to = c(".value", "player"),
+    names_pattern = "(focal_strategy|opponent_strategy|move|payoff)_(1|2)"
+  ) %>%
+  mutate(
+    cooperate = if_else(tolower(move) == "cooperate", 1, 0),
+    focal_strategy = factor(focal_strategy),
+    opponent_strategy = factor(opponent_strategy),
+    player = factor(player)
+  )
+
+# Check strategy levels
+levels(df_long$focal_strategy)
+
+
+
+
+
+
+
+
+####### BLMGER -COOPERATION W/ INTERACTIONS
+install.packages("blme")
+library(blme)
+
+m_coop_pen <- bglmer(
+  cooperate ~ focal_strategy * opponent_strategy + scale(round) + (1 | pair_uid),
+  data = df_long,
+  family = binomial,
+  nAGQ = 9,
+  control = glmerControl(
+    optimizer = c("bobyqa", "Nelder_Mead"),
+    optCtrl = list(maxfun = 200000)
+  ),
+  cov.prior = NULL,
+  fixef.prior = normal(sd = c(10, 2.5))
+)
+
+summary(m_coop_pen)
+
+drop1(m_coop_pen, test = "Chisq")
+
+
+
+library(emmeans)
+
+emmeans(m_coop_pen, ~ focal_strategy * opponent_strategy, type = "response")
+pairs(emmeans(m_coop_pen, ~ focal_strategy | opponent_strategy, type = "response"))
+pairs(emmeans(m_coop_pen, ~ opponent_strategy | focal_strategy, type = "response"))
+
+emmeans(m_coop_pen, ~ focal_strategy * opponent_strategy, type = "response")
+
+
+######### Pairwise comparisons between strategies ###############
+
+emm_coop <- emmeans(m_coop, ~ focal_strategy, type = "response")
+emm_coop
+pairs(emm_coop, adjust = "tukey")
+
+
+
+
+
+
+
+
+
+
+
+
+##################### N A N O ########################################
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(readr)
+
+
+# Reshape to long format: one row per strategy per round
+df_long <- exp2_nano %>%
+  mutate(pair_uid = interaction(test, pairing_id, drop = TRUE)) %>%
+  transmute(
+    test,
+    pair_uid,
+    pairing_id,
+    round,
+    
+    focal_strategy_1 = strategy_1,
+    opponent_strategy_1 = strategy_2,
+    move_1 = move_strategy_1,
+    payoff_1 = payoff_strategy_1,
+    
+    focal_strategy_2 = strategy_2,
+    opponent_strategy_2 = strategy_1,
+    move_2 = move_strategy_2,
+    payoff_2 = payoff_strategy_2
+  ) %>%
+  pivot_longer(
+    cols = c(focal_strategy_1, opponent_strategy_1, move_1, payoff_1,
+             focal_strategy_2, opponent_strategy_2, move_2, payoff_2),
+    names_to = c(".value", "player"),
+    names_pattern = "(focal_strategy|opponent_strategy|move|payoff)_(1|2)"
+  ) %>%
+  mutate(
+    cooperate = if_else(tolower(move) == "cooperate", 1, 0),
+    focal_strategy = factor(focal_strategy),
+    opponent_strategy = factor(opponent_strategy),
+    player = factor(player)
+  )
+
+# Check strategy levels
+levels(df_long$focal_strategy)
+
+
+
+########### NEW COOPERTION INTERACTION STATS
+
+m_coop_pen <- bglmer(
+  cooperate ~ focal_strategy * opponent_strategy + scale(round) + (1 | pair_uid),
+  data = df_long,
+  family = binomial,
+  nAGQ = 9,
+  control = glmerControl(
+    optimizer = c("bobyqa", "Nelder_Mead"),
+    optCtrl = list(maxfun = 200000)
+  ),
+  cov.prior = NULL,
+  fixef.prior = normal(sd = c(10, 2.5))
+)
+
+summary(m_coop_pen)
+
+drop1(m_coop_pen, test = "Chisq")
+
+
+
+library(emmeans)
+
+emmeans(m_coop_pen, ~ focal_strategy * opponent_strategy, type = "response")
+pairs(emmeans(m_coop_pen, ~ focal_strategy | opponent_strategy, type = "response"))
+pairs(emmeans(m_coop_pen, ~ opponent_strategy | focal_strategy, type = "response"))
+
+emmeans(m_coop_pen, ~ focal_strategy * opponent_strategy, type = "response")
+
+
+
+
+
+
+
+########################## 4 . 1 ######################################
+
+
+rm(list=ls())
+
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(readr)
+
+
+# Reshape to long format: one row per strategy per round
+df_long <- exp2_4.1 %>%
+  mutate(pair_uid = interaction(test, pairing_id, drop = TRUE)) %>%
+  transmute(
+    test,
+    pair_uid,
+    pairing_id,
+    round,
+    
+    focal_strategy_1 = strategy_1,
+    opponent_strategy_1 = strategy_2,
+    move_1 = move_strategy_1,
+    payoff_1 = payoff_strategy_1,
+    
+    focal_strategy_2 = strategy_2,
+    opponent_strategy_2 = strategy_1,
+    move_2 = move_strategy_2,
+    payoff_2 = payoff_strategy_2
+  ) %>%
+  pivot_longer(
+    cols = c(focal_strategy_1, opponent_strategy_1, move_1, payoff_1,
+             focal_strategy_2, opponent_strategy_2, move_2, payoff_2),
+    names_to = c(".value", "player"),
+    names_pattern = "(focal_strategy|opponent_strategy|move|payoff)_(1|2)"
+  ) %>%
+  mutate(
+    cooperate = if_else(tolower(move) == "cooperate", 1, 0),
+    focal_strategy = factor(focal_strategy),
+    opponent_strategy = factor(opponent_strategy),
+    player = factor(player)
+  )
+
+# Check strategy levels
+levels(df_long$focal_strategy)
+
+
+
+########### COOPERTION INTERACTION STATS
+
+m_coop_pen <- bglmer(
+  cooperate ~ focal_strategy * opponent_strategy + scale(round) + (1 | pair_uid),
+  data = df_long,
+  family = binomial,
+  nAGQ = 9,
+  control = glmerControl(
+    optimizer = c("bobyqa", "Nelder_Mead"),
+    optCtrl = list(maxfun = 200000)
+  ),
+  cov.prior = NULL,
+  fixef.prior = normal(sd = c(10, 2.5))
+)
+
+summary(m_coop_pen)
+
+drop1(m_coop_pen, test = "Chisq")
+
+
+
+library(emmeans)
+
+emmeans(m_coop_pen, ~ focal_strategy * opponent_strategy, type = "response")
+pairs(emmeans(m_coop_pen, ~ focal_strategy | opponent_strategy, type = "response"))
+pairs(emmeans(m_coop_pen, ~ opponent_strategy | focal_strategy, type = "response"))
+
+emmeans(m_coop_pen, ~ focal_strategy * opponent_strategy, type = "response")
+
+
+
+
+
+######### A L L   3   -  F U L L    D A T A S E T ###################
+
+
+
+# Reshape to long format: one row per strategy per round
+df_long <- exp2_full %>%
+  mutate(pair_uid = interaction(test, pairing_id, drop = TRUE)) %>%
+  transmute(
+    test,
+    pair_uid,
+    pairing_id,
+    round,
+    
+    focal_strategy_1 = strategy_1,
+    opponent_strategy_1 = strategy_2,
+    move_1 = move_strategy_1,
+    payoff_1 = payoff_strategy_1,
+    
+    focal_strategy_2 = strategy_2,
+    opponent_strategy_2 = strategy_1,
+    move_2 = move_strategy_2,
+    payoff_2 = payoff_strategy_2
+  ) %>%
+  pivot_longer(
+    cols = c(focal_strategy_1, opponent_strategy_1, move_1, payoff_1,
+             focal_strategy_2, opponent_strategy_2, move_2, payoff_2),
+    names_to = c(".value", "player"),
+    names_pattern = "(focal_strategy|opponent_strategy|move|payoff)_(1|2)"
+  ) %>%
+  mutate(
+    cooperate = if_else(tolower(move) == "cooperate", 1, 0),
+    focal_strategy = factor(focal_strategy),
+    opponent_strategy = factor(opponent_strategy),
+    player = factor(player)
+  )
+
+# Check strategy levels
+levels(df_long$focal_strategy)
+
+##########################################################
+
+
+
+
+#########
+
+m_coop <- glmer(
+  cooperate ~ focal_strategy * opponent_strategy + scale(round) + (1 | pair_uid),
+  data = df_long,
+  family = binomial
+)
+
+summary(m_coop)
+drop1(m_coop, test = "Chisq")
+
+
+
+
+
+
+
+########################################################################
+
+#PAYOFFS FOR THE FULL DATASET!!!#####
+
+
+#Fixing the layout of the dataframe
+
+library(dplyr)
+library(lme4)
+
+exp2_full_long <- bind_rows(
+  exp2_full %>%
+    transmute(
+      pairing_id = pairing_id,
+      round = round,
+      model = model,
+      focal_strategy = strategy_1,
+      opponent_strategy = strategy_2,
+      payoff = payoff_strategy_1
+    ),
+  exp2_full %>%
+    transmute(
+      pairing_id = pairing_id,
+      round = round,
+      model = model,
+      focal_strategy = strategy_2,
+      opponent_strategy = strategy_1,
+      payoff = payoff_strategy_2
+    )
+) %>%
+  mutate(
+    model = factor(model),
+    focal_strategy = factor(focal_strategy),
+    opponent_strategy = factor(opponent_strategy)
+  )
+
+
+########### fitting the interaction model #########
+
+
+m_payoff_models <- lmer(
+  payoff ~ model * focal_strategy * opponent_strategy + scale(round) + (1 | pairing_id),
+  data = exp2_full_long,
+  REML = FALSE
+)
+
+summary(m_payoff_models)
+anova(m_payoff_models)
+
+
+emmeans(m_payoff_models, ~ model * focal_strategy * opponent_strategy)
+pairs(emmeans(m_payoff_models, ~ model | focal_strategy * opponent_strategy))
+
+isSingular(m_payoff_models)
+VarCorr(m_payoff_models)
+
+
+
+
+
+#### CHECKING RESIDUALS, NORMALITY ETC. #########
+
+plot(m_payoff_models_2, which=2)
+plot(m_payoffs_models)
+
+library(emmeans)
+
+emmeans(m_payoff_models_2, ~ model * focal_strategy * opponent_strategy)
+pairs(emmeans(m_payoff_models_2, ~ model | focal_strategy * opponent_strategy))
+
+
+
+
+
+
+
+
+
+
+####### FITTING A COMBINED BGLMER FOR COOPERATION FOR ALL 3 MODELS .....
+
+library(blme)
+library(emmeans)
+
+
+library(readr)
+library(dplyr)
+library(blme)
+library(lme4)
+library(emmeans)
+
+# 1) Read the uploaded file
+
+library(readr)
+library(dplyr)
+library(blme)
+library(lme4)
+
+
+# make long format: one row per player per round
+df_long <- bind_rows(
+  raw %>%
+    transmute(
+      model = model,
+      test = test,
+      pairing_id = pairing_id,
+      round = round,
+      focal_strategy = strategy_1,
+      opponent_strategy = strategy_2,
+      move = move_strategy_1
+    ),
+  raw %>%
+    transmute(
+      model = model,
+      test = test,
+      pairing_id = pairing_id,
+      round = round,
+      focal_strategy = strategy_2,
+      opponent_strategy = strategy_1,
+      move = move_strategy_2
+    )
+) %>%
+  mutate(
+    model = factor(model, levels = c("GPT4.1", "GPT4.1-mini", "GPT4.1-nano")),
+    focal_strategy = factor(focal_strategy, levels = c("AC", "AD", "Pav", "TFT")),
+    opponent_strategy = factor(opponent_strategy, levels = c("AC", "AD", "Pav", "TFT")),
+    cooperate = ifelse(move == "cooperate", 1, 0),
+    round_z = as.numeric(scale(round)),
+    pair_uid = interaction(model, test, pairing_id, drop = TRUE)
+  )
+
+m_coop_fast <- bglmer(
+  cooperate ~ model * focal_strategy * opponent_strategy + round_z + (1 | pair_uid),
+  data = df_long,
+  family = binomial,
+  nAGQ = 1,
+  control = glmerControl(
+    optimizer = c("bobyqa", "Nelder_Mead"),
+    optCtrl = list(maxfun = 100000)
+  ),
+  cov.prior = NULL,
+  fixef.prior = normal(sd = c(10, 2.5))
+)
+
+summary(m_coop_fast)
+
+
+
+
+
+m_test <- bglmer(
+  cooperate ~ model * focal_strategy * opponent_strategy + round_z + (1 | pair_uid),
+  data = df_long,
+  family = binomial,
+  nAGQ = 0,
+  verbose = 2,
+  control = glmerControl(
+    optimizer = c("bobyqa", "Nelder_Mead"),
+    optCtrl = list(maxfun = 20000)
+  ),
+  cov.prior = NULL,
+  fixef.prior = normal(sd = c(10, 2.5))
+)
+
+
+
+
+library(lme4)
+
+m_check <- glmer(
+  cooperate ~ model * focal_strategy * opponent_strategy + round_z + (1 | pair_uid),
+  data = df_long,
+  family = binomial,
+  nAGQ = 1,
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 50000)
+  )
+)
+
+summary(m_check)
+isSingular(m_check)
+VarCorr(m_check)
+
+
+
+
+
+
+library(blme)
+library(emmeans)
+
+df_long$model <- factor(df_long$model,
+                        levels = c("GPT4.1", "GPT4.1-mini", "GPT4.1-nano"))
+
+df_long$focal_strategy <- factor(df_long$focal_strategy,
+                                 levels = c("AC", "AD", "Pav", "TFT"))
+
+df_long$opponent_strategy <- factor(df_long$opponent_strategy,
+                                    levels = c("AC", "AD", "Pav", "TFT"))
+
+df_long$pair_uid <- factor(df_long$pair_uid)
+
+fit_one_model <- function(dat) {
+  bglmer(
+    cooperate ~ focal_strategy * opponent_strategy + round_z + (1 | pair_uid),
+    data = droplevels(dat),
+    family = binomial,
+    nAGQ = 1,
+    control = glmerControl(
+      optimizer = "bobyqa",
+      optCtrl = list(maxfun = 100000)
+    ),
+    cov.prior = NULL,
+    fixef.prior = normal(sd = c(10, 2.5))
+  )
+}
+
+m_41   <- fit_one_model(subset(df_long, model == "GPT4.1"))
+m_mini <- fit_one_model(subset(df_long, model == "GPT4.1-mini"))
+m_nano <- fit_one_model(subset(df_long, model == "GPT4.1-nano"))
+
+summary(m_41)
+summary(m_mini)
+summary(m_nano)
+
+
+
+
+
+
+
+
+########## COMMUNICATION STRATEGY TENDENCY #######
+
+library(readr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+
+# CreatING a basic behavioural dataset
+df <- df %>%
+  mutate(
+    cooperate = if_else(tolower(move) == "cooperate", 1, 0),
+    pair_uid = interaction(interaction, pairing_id, drop = TRUE),
+    focal_model = factor(focal_model, levels = c("4.1", "Mini", "Nano")),
+    opponent_model = factor(opponent_model, levels = c("4.1", "Mini", "Nano"))
+  )
+
+df_opp <- df %>%
+  select(pair_uid, round, agent_id, cooperate) %>%
+  rename(
+    opponent_agent_id = agent_id,
+    opponent_cooperate = cooperate
+  )
+
+# Adding lagged behaviour
+df2 <- df %>%
+  left_join(
+    df_opp,
+    by = c("pair_uid", "round"),
+    relationship = "many-to-many"
+  ) %>%
+  filter(agent_id != opponent_agent_id) %>%
+  select(-opponent_agent_id)
+
+df2 <- df2 %>%
+  arrange(pair_uid, agent_id, round) %>%
+  group_by(pair_uid, agent_id) %>%
+  mutate(
+    own_prev_move = lag(cooperate),
+    opp_prev_move = lag(opponent_cooperate)
+  ) %>%
+  ungroup()
+
+# ---------------------------------------------------
+# TEXT PATTERNS
+# ---------------------------------------------------
+
+cooperative_patterns <- c(
+  "\\bi (will|would|choose|plan to|intend to) cooperate\\b",
+  "\\bcontinue to cooperate\\b",
+  "\\bmutual cooperation\\b",
+  "\\bcooperation is optimal\\b",
+  "\\b(?:i\\s*(?:am|'m)\\s*)?(?:willing|prepared|ready|inclined)\\s+to\\b",
+  "\\bcommitted to\\b",
+  "\\b(?:move forward|moving forward|move ahead|proceed(?:ing)?)\\b",
+  "\\b(?:working together|collaborative approach|collaborative environment|cooperative spirit|spirit of collaboration)\\b",
+  "\\b(?:mutually beneficial|mutual benefit|benefit both of us|for both of us|win-win)\\b",
+  "\\b(?:share|exchange)\\s+(?:my|our|your)\\s+(?:findings|results|data|dataset|summary|research)\\b",
+  "\\b(?:offer|propose)\\s+(?:a\\s+)?flexible\\s+(?:contract|contracts|arrangement|arrangements)\\b",
+  "\\b(?:fair|honest|constructive)(?:,?\\s*(?:and\\s+)?)?(?:constructive\\s+)?feedback\\b",
+  "\\bcontinue (?:this approach|this process|working together|to share|to cooperate)\\b",
+  "\\bmaintain(?:ing)? (?:honesty|cooperation|this cooperative approach)\\b"
+)
+
+reciprocity_patterns <- c(
+  "reciproc",
+  "respond in kind",
+  "mirror",
+  "if they cooperate",
+  "if the other cooperates",
+  "as long as they cooperate",
+  "\\bdo the same\\b",
+  "\\bi'?ll do the same\\b",
+  "\\b(?:as long as|so long as)\\b",
+  "\\bif you(?:'re| are)?\\s+(?:willing|open|committed|prepared)\\b",
+  "\\b(?:contingent on|on the condition that)\\b",
+  "\\b(?:simultaneous(?:ly)?|direct swap|exchange simultaneously|simultaneous data transfer)\\b",
+  "\\b(?:matched my|matching my)\\b",
+  "\\b(?:mutual understanding|reciprocal trust)\\b",
+  "\\bhonor the spirit of collaboration\\b",
+  "\\bif either of us\\b"
+)
+
+retaliation_patterns <- c(
+  "retaliat",
+  "punish",
+  "if they defect",
+  "respond with defection",
+  "defect in response",
+  "tit for tat",
+  "\\b(?:adjust|adapt) my strategy\\b",
+  "\\breconsider cooperation\\b",
+  "\\b(?:remain cautious|stay vigilant|remain vigilant|vigilant)\\b",
+  "\\bif I notice\\b",
+  "\\bmonitor for (?:opportunism|opportunistic behavior|defection|betrayal|changes?)\\b",
+  "\\bunless betrayed\\b",
+  "\\b(?:might switch|shift strategies)\\b"
+)
+
+forgiveness_patterns <- c(
+  "forgive",
+  "return to cooperation",
+  "resume cooperation",
+  "another chance",
+  "\\b(?:cooperate again|start with cooperation again|return to cooperation|resume cooperation|another chance)\\b"
+)
+
+trust_patterns <- c(
+  "trust",
+  "good faith",
+  "credible",
+  "honest",
+  "transparent",
+  "\\b(?:openness|openly|open communication|open with you|be open with you)\\b",
+  "\\b(?:upfront|straightforward(?:ness)?|direct)\\b",
+  "\\b(?:fairness|fair|constructive)\\b",
+  "\\b(?:reliable|consistent|consistency)\\b",
+  "\\b(?:trustworthy|trustworthiness)\\b",
+  "\\b(?:sincere|sincere effort)\\b",
+  "\\b(?:amicable|goodwill)\\b",
+  "\\bclear expectations\\b",
+  "\\b(?:mutual commitment|commitment to fairness|commitment to honesty)\\b"
+)
+
+long_term_patterns <- c(
+  "long-term",
+  "future rounds",
+  "next round",
+  "later rounds",
+  "over time",
+  "repeated game",
+  "iterated",
+  "\\bin the long run\\b",
+  "\\b(?:going forward|moving forward)\\b",
+  "\\bfoundation(?: of trust| for collaboration)?\\b",
+  "\\bongoing\\b",
+  "\\b(?:for now|at this stage)\\b",
+  "\\bmonitor(?: for| how)?\\b",
+  "\\bpattern of\\s+(?:cooperation|trust|openness|fairness)\\b",
+  "\\bfor several rounds\\b",
+  "\\b(?:rounds ahead|next phase)\\b",
+  "\\b(?:keep options open|revisit later|revisit the arrangement|revisit the terms)\\b",
+  "\\bmaintain momentum\\b"
+)
+
+exploitation_patterns <- c(
+  "\\bexploit\\b",
+  "\\bopportunis(?:m|tic)\\b",
+  "\\btake advantage\\b",
+  "\\bdeceive\\b",
+  "\\bmislead\\b",
+  "\\bbetray\\b",
+  "\\bmanipulat\\w*\\b",
+  "\\bstring (?:them|you) along\\b",
+  "\\bextract information without reciprocating\\b",
+  "\\bget (?:their|your) cooperation and then defect\\b"
+)
+
+score_exploitation <- function(text) {
+  text <- tolower(ifelse(is.na(text), "", text))
+  str_count(text, regex(paste(exploitation_patterns, collapse = "|"), ignore_case = TRUE))
+}
+
+score_text_features <- function(text) {
+  if (is.na(text) || str_trim(text) == "") {
+    return(tibble(
+      cooperative_intent = NA_integer_,
+      reciprocity = NA_integer_,
+      retaliation = NA_integer_,
+      forgiveness = NA_integer_,
+      exploitation = NA_integer_,
+      trust_signal = NA_integer_,
+      long_term = NA_integer_
+    ))
+  }
+  
+  text <- tolower(text)
+  
+  tibble(
+    cooperative_intent =
+      str_count(text, regex(paste(cooperative_patterns, collapse = "|"), ignore_case = TRUE)),
+    
+    reciprocity =
+      str_count(text, regex(paste(reciprocity_patterns, collapse = "|"), ignore_case = TRUE)),
+    
+    retaliation =
+      str_count(text, regex(paste(retaliation_patterns, collapse = "|"), ignore_case = TRUE)),
+    
+    forgiveness =
+      str_count(text, regex(paste(forgiveness_patterns, collapse = "|"), ignore_case = TRUE)),
+    
+    exploitation = score_exploitation(text),
+    
+    trust_signal =
+      str_count(text, regex(paste(trust_patterns, collapse = "|"), ignore_case = TRUE)),
+    
+    long_term =
+      str_count(text, regex(paste(long_term_patterns, collapse = "|"), ignore_case = TRUE))
+  )
+}
+
+
+# SCORE COMMUNICATION ONLY
+
+
+comm_scores <- df2 %>%
+  mutate(text = communication) %>%
+  rowwise() %>%
+  mutate(scores = list(score_text_features(text))) %>%
+  unnest(scores) %>%
+  ungroup() %>%
+  select(
+    pair_uid, round, agent_id,
+    comm_cooperative_intent = cooperative_intent,
+    comm_reciprocity = reciprocity,
+    comm_retaliation = retaliation,
+    comm_forgiveness = forgiveness,
+    comm_exploitation = exploitation,
+    comm_trust_signal = trust_signal,
+    comm_long_term = long_term
+  )
+
+analysis_df <- df2 %>%
+  left_join(comm_scores, by = c("pair_uid", "round", "agent_id"))
+
+
+# DESCRIPTIVE SUMMARIES
+
+
+model_summary <- analysis_df %>%
+  group_by(focal_model) %>%
+  summarise(
+    mean_cooperation = mean(cooperate, na.rm = TRUE),
+    coop_after_opp_coop = mean(cooperate[opp_prev_move == 1], na.rm = TRUE),
+    coop_after_opp_defect = mean(cooperate[opp_prev_move == 0], na.rm = TRUE),
+    mean_comm_reciprocity = mean(comm_reciprocity, na.rm = TRUE),
+    mean_comm_retaliation = mean(comm_retaliation, na.rm = TRUE),
+    mean_comm_forgiveness = mean(comm_forgiveness, na.rm = TRUE),
+    mean_comm_exploitation = mean(comm_exploitation, na.rm = TRUE),
+    mean_comm_trust = mean(comm_trust_signal, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+model_summary
+
+
+# SIMPLE STRATEGY CLASSIFICATION SUMMARY
+
+
+strategy_tendency <- model_summary %>%
+  mutate(
+    inferred_strategy = case_when(
+      mean_cooperation > 0.9 &
+        mean_comm_reciprocity < 0.3 &
+        mean_comm_retaliation < 0.3 &
+        mean_comm_exploitation < 0.2 ~ "AC_like",
+      
+      mean_cooperation < 0.3 &
+        mean_comm_exploitation >= 0.5 ~ "AD_like",
+      
+      coop_after_opp_coop > 0.8 &
+        coop_after_opp_defect < 0.5 &
+        mean_comm_reciprocity >= 0.5 ~ "TFT_like",
+      
+      coop_after_opp_coop > 0.8 &
+        coop_after_opp_defect >= 0.5 &
+        mean_comm_reciprocity >= 0.5 &
+        mean_comm_forgiveness >= 0.3 ~ "forgiving_reciprocal",
+      
+      TRUE ~ "mixed_or_unclear"
+    )
+  )
+
+strategy_tendency
+
+
+
+
+
+###### THINKING STRATEGY TENDENCY #########
+
+
+library(readr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(tibble)
+
+
+file_manifest <- tribble(
+  ~interaction,    ~model1, ~model2, ~folder,            ~rep_folder, ~moves_file,                  ~thinking_file,
+  "4.1_vs_4.1",    "4.1",   "4.1",   "20_04_4.1",       "rep_1",     "moves_20260420_152148.csv",  "thinking_20260420_152148.csv",
+  "4.1_vs_nano",   "4.1",   "Nano",  "20_04_4.1vnano",  "rep_1",     "moves_20260420_152149.csv",  "thinking_20260420_152149.csv",
+  "nano_vs_nano",  "Nano",  "Nano",  "20_04_nano",      "rep_1",     "moves_20260420_154331.csv",  "thinking_20260420_154331.csv"
+)
+
+thinking_contexts_to_use <- c("move_decision")
+
+read_one_interaction <- function(interaction_name, model1_name, model2_name, moves_path, thinking_path,
+                                 thinking_contexts_to_use = c("move_decision")) {
+  
+  moves <- read_csv(moves_path, show_col_types = FALSE) %>%
+    transmute(
+      interaction = interaction_name,
+      model1 = model1_name,
+      model2 = model2_name,
+      pairing_id,
+      round,
+      agent_id,
+      move
+    )
+  
+  thinking_raw <- read_csv(thinking_path, show_col_types = FALSE)
+  
+  if (!is.null(thinking_contexts_to_use)) {
+    thinking_raw <- thinking_raw %>%
+      filter(context %in% thinking_contexts_to_use)
+  }
+  
+  thinking <- thinking_raw %>%
+    group_by(pairing_id, round, agent_id) %>%
+    summarise(
+      thinking_context = paste(sort(unique(context)), collapse = " || "),
+      thinking_text = str_squish(paste(thinking, collapse = " ")),
+      .groups = "drop"
+    )
+  
+  moves %>%
+    left_join(thinking, by = c("pairing_id", "round", "agent_id")) %>%
+    mutate(
+      focal_model = case_when(
+        agent_id == "Adaptive_0_0" ~ model1,
+        agent_id == "Adaptive_1_0" ~ model2,
+        TRUE ~ NA_character_
+      ),
+      opponent_model = case_when(
+        agent_id == "Adaptive_0_0" ~ model2,
+        agent_id == "Adaptive_1_0" ~ model1,
+        TRUE ~ NA_character_
+      )
+    )
+}
+
+df <- pmap_dfr(
+  list(
+    file_manifest$interaction,
+    file_manifest$model1,
+    file_manifest$model2,
+    file.path(base_dir, file_manifest$folder, file_manifest$rep_folder, file_manifest$moves_file),
+    file.path(base_dir, file_manifest$folder, file_manifest$rep_folder, file_manifest$thinking_file)
+  ),
+  ~ read_one_interaction(..1, ..2, ..3, ..4, ..5, thinking_contexts_to_use)
+)
+
+df <- df %>%
+  mutate(
+    cooperate = if_else(tolower(move) == "cooperate", 1L, 0L),
+    pair_uid = interaction(interaction, pairing_id, drop = TRUE),
+    focal_model = factor(focal_model, levels = c("4.1", "Mini", "Nano")),
+    opponent_model = factor(opponent_model, levels = c("4.1", "Mini", "Nano"))
+  )
+
+df_opp <- df %>%
+  select(pair_uid, round, agent_id, cooperate) %>%
+  rename(
+    opponent_agent_id = agent_id,
+    opponent_cooperate = cooperate
+  )
+
+df2 <- df %>%
+  left_join(df_opp, by = c("pair_uid", "round")) %>%
+  filter(agent_id != opponent_agent_id) %>%
+  select(-opponent_agent_id)
+
+df2 <- df2 %>%
+  arrange(pair_uid, agent_id, round) %>%
+  group_by(pair_uid, agent_id) %>%
+  mutate(
+    own_prev_move = lag(cooperate),
+    opp_prev_move = lag(opponent_cooperate)
+  ) %>%
+  ungroup()
+
+cooperative_patterns <- c(
+  "\\bi (will|would|choose|plan to|intend to) cooperate\\b",
+  "\\bcontinue to cooperate\\b",
+  "\\bmutual cooperation\\b",
+  "\\bcooperation is optimal\\b",
+  "\\b(?:i\\s*(?:am|'m)\\s*)?(?:willing|prepared|ready|inclined)\\s+to\\b",
+  "\\bcommitted to\\b",
+  "\\b(?:move forward|moving forward|move ahead|proceed(?:ing)?)\\b",
+  "\\b(?:working together|collaborative approach|collaborative environment|cooperative spirit|spirit of collaboration)\\b",
+  "\\b(?:mutually beneficial|mutual benefit|benefit both of us|for both of us|win-win)\\b",
+  "\\b(?:share|exchange)\\s+(?:my|our|your)\\s+(?:findings|results|data|dataset|summary|research)\\b",
+  "\\b(?:offer|propose)\\s+(?:a\\s+)?flexible\\s+(?:contract|contracts|arrangement|arrangements)\\b",
+  "\\b(?:fair|honest|constructive)(?:,?\\s*(?:and\\s+)?)?(?:constructive\\s+)?feedback\\b",
+  "\\bcontinue (?:this approach|this process|working together|to share|to cooperate)\\b",
+  "\\bmaintain(?:ing)? (?:honesty|cooperation|this cooperative approach)\\b"
+)
+
+reciprocity_patterns <- c(
+  "reciproc",
+  "respond in kind",
+  "mirror",
+  "if they cooperate",
+  "if the other cooperates",
+  "as long as they cooperate",
+  "\\bdo the same\\b",
+  "\\bi'?ll do the same\\b",
+  "\\b(?:as long as|so long as)\\b",
+  "\\bif you(?:'re| are)?\\s+(?:willing|open|committed|prepared)\\b",
+  "\\b(?:contingent on|on the condition that)\\b",
+  "\\b(?:simultaneous(?:ly)?|direct swap|exchange simultaneously|simultaneous data transfer)\\b",
+  "\\b(?:matched my|matching my)\\b",
+  "\\b(?:mutual understanding|reciprocal trust)\\b",
+  "\\bhonor the spirit of collaboration\\b",
+  "\\bif either of us\\b"
+)
+
+retaliation_patterns <- c(
+  "retaliat",
+  "punish",
+  "if they defect",
+  "respond with defection",
+  "defect in response",
+  "tit for tat",
+  "\\b(?:adjust|adapt) my strategy\\b",
+  "\\breconsider cooperation\\b",
+  "\\b(?:remain cautious|stay vigilant|remain vigilant|vigilant)\\b",
+  "\\bif I notice\\b",
+  "\\bmonitor for (?:opportunism|opportunistic behavior|defection|betrayal|changes?)\\b",
+  "\\bunless betrayed\\b",
+  "\\b(?:might switch|shift strategies)\\b"
+)
+
+forgiveness_patterns <- c(
+  "forgive",
+  "return to cooperation",
+  "resume cooperation",
+  "another chance",
+  "\\b(?:cooperate again|start with cooperation again|return to cooperation|resume cooperation|another chance)\\b"
+)
+
+trust_patterns <- c(
+  "trust",
+  "good faith",
+  "credible",
+  "honest",
+  "transparent",
+  "\\b(?:openness|openly|open communication|open with you|be open with you)\\b",
+  "\\b(?:upfront|straightforward(?:ness)?|direct)\\b",
+  "\\b(?:fairness|fair|constructive)\\b",
+  "\\b(?:reliable|consistent|consistency)\\b",
+  "\\b(?:trustworthy|trustworthiness)\\b",
+  "\\b(?:sincere|sincere effort)\\b",
+  "\\b(?:amicable|goodwill)\\b",
+  "\\bclear expectations\\b",
+  "\\b(?:mutual commitment|commitment to fairness|commitment to honesty)\\b"
+)
+
+long_term_patterns <- c(
+  "long-term",
+  "future rounds",
+  "next round",
+  "later rounds",
+  "over time",
+  "repeated game",
+  "iterated",
+  "\\bin the long run\\b",
+  "\\b(?:going forward|moving forward)\\b",
+  "\\bfoundation(?: of trust| for collaboration)?\\b",
+  "\\bongoing\\b",
+  "\\b(?:for now|at this stage)\\b",
+  "\\bmonitor(?: for| how)?\\b",
+  "\\bpattern of\\s+(?:cooperation|trust|openness|fairness)\\b",
+  "\\bfor several rounds\\b",
+  "\\b(?:rounds ahead|next phase)\\b",
+  "\\b(?:keep options open|revisit later|revisit the arrangement|revisit the terms)\\b",
+  "\\bmaintain momentum\\b"
+)
+
+exploitation_patterns <- c(
+  "\\bexploit\\b",
+  "\\bopportunis(?:m|tic)\\b",
+  "\\btake advantage\\b",
+  "\\bdeceive\\b",
+  "\\bmislead\\b",
+  "\\bbetray\\b",
+  "\\bmanipulat\\w*\\b",
+  "\\bstring (?:them|you) along\\b",
+  "\\bextract information without reciprocating\\b",
+  "\\bget (?:their|your) cooperation and then defect\\b"
+)
+
+score_exploitation <- function(text) {
+  text <- tolower(ifelse(is.na(text), "", text))
+  str_count(text, regex(paste(exploitation_patterns, collapse = "|"), ignore_case = TRUE))
+}
+
+score_text_features <- function(text) {
+  if (is.na(text) || str_trim(text) == "") {
+    return(tibble(
+      cooperative_intent = NA_integer_,
+      reciprocity = NA_integer_,
+      retaliation = NA_integer_,
+      forgiveness = NA_integer_,
+      exploitation = NA_integer_,
+      trust_signal = NA_integer_,
+      long_term = NA_integer_
+    ))
+  }
+  
+  text <- tolower(text)
+  
+  tibble(
+    cooperative_intent =
+      str_count(text, regex(paste(cooperative_patterns, collapse = "|"), ignore_case = TRUE)),
+    reciprocity =
+      str_count(text, regex(paste(reciprocity_patterns, collapse = "|"), ignore_case = TRUE)),
+    retaliation =
+      str_count(text, regex(paste(retaliation_patterns, collapse = "|"), ignore_case = TRUE)),
+    forgiveness =
+      str_count(text, regex(paste(forgiveness_patterns, collapse = "|"), ignore_case = TRUE)),
+    exploitation =
+      score_exploitation(text),
+    trust_signal =
+      str_count(text, regex(paste(trust_patterns, collapse = "|"), ignore_case = TRUE)),
+    long_term =
+      str_count(text, regex(paste(long_term_patterns, collapse = "|"), ignore_case = TRUE))
+  )
+}
+
+think_scores <- df2 %>%
+  mutate(
+    text = thinking_text,
+    scores = map(text, score_text_features)
+  ) %>%
+  unnest(scores) %>%
+  select(
+    pair_uid, round, agent_id,
+    think_cooperative_intent = cooperative_intent,
+    think_reciprocity = reciprocity,
+    think_retaliation = retaliation,
+    think_forgiveness = forgiveness,
+    think_exploitation = exploitation,
+    think_trust_signal = trust_signal,
+    think_long_term = long_term
+  )
+
+analysis_df <- df2 %>%
+  left_join(think_scores, by = c("pair_uid", "round", "agent_id"))
+
+model_summary <- analysis_df %>%
+  group_by(focal_model) %>%
+  summarise(
+    mean_cooperation = mean(cooperate, na.rm = TRUE),
+    coop_after_opp_coop = mean(cooperate[opp_prev_move == 1], na.rm = TRUE),
+    coop_after_opp_defect = mean(cooperate[opp_prev_move == 0], na.rm = TRUE),
+    mean_think_cooperative_intent = mean(think_cooperative_intent, na.rm = TRUE),
+    mean_think_reciprocity = mean(think_reciprocity, na.rm = TRUE),
+    mean_think_retaliation = mean(think_retaliation, na.rm = TRUE),
+    mean_think_forgiveness = mean(think_forgiveness, na.rm = TRUE),
+    mean_think_exploitation = mean(think_exploitation, na.rm = TRUE),
+    mean_think_trust = mean(think_trust_signal, na.rm = TRUE),
+    mean_think_long_term = mean(think_long_term, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+model_summary
+
+strategy_tendency <- model_summary %>%
+  mutate(
+    inferred_strategy = case_when(
+      mean_cooperation > 0.9 &
+        mean_think_reciprocity < 0.3 &
+        mean_think_retaliation < 0.3 &
+        mean_think_exploitation < 0.2 ~ "AC_like",
+      mean_cooperation < 0.3 &
+        mean_think_exploitation >= 0.5 ~ "AD_like",
+      coop_after_opp_coop > 0.8 &
+        coop_after_opp_defect < 0.5 &
+        mean_think_reciprocity >= 0.5 ~ "TFT_like",
+      coop_after_opp_coop > 0.8 &
+        coop_after_opp_defect >= 0.5 &
+        mean_think_reciprocity >= 0.5 &
+        mean_think_forgiveness >= 0.3 ~ "forgiving_reciprocal",
+      TRUE ~ "mixed_or_unclear"
+    )
+  )
+
+strategy_tendency
+
+
+
+
+
+
+
+
+######### BEHAVIOURAL DIFFERENCES #############
+
+
+
+library(dplyr)
+library(readr)
+library(tidyr)
+library(purrr)
+library(writexl)
+
+library(dplyr)
+library(readr)
+library(stringr)
+library(tidyr)
+library(purrr)
+
+# READ MASTER DATASET
+
+
+# BASIC VARIABLES
+
+df <- df %>%
+  mutate(
+    cooperate = if_else(str_to_lower(move) == "cooperate", 1L, 0L),
+    pair_uid = interaction(interaction, pairing_id, drop = TRUE),
+    focal_model = factor(focal_model, levels = c("4.1", "Mini", "Nano")),
+    opponent_model = factor(opponent_model, levels = c("4.1", "Mini", "Nano"))
+  )
+
+# Opponent move file for same round
+df_opp <- df %>%
+  select(pair_uid, round, agent_id, cooperate) %>%
+  rename(
+    opponent_agent_id = agent_id,
+    opponent_cooperate = cooperate
+  )
+
+# Join each agent to the opponent's move in the same round
+df2 <- df %>%
+  left_join(df_opp, by = c("pair_uid", "round"), relationship = "many-to-many") %>%
+  filter(agent_id != opponent_agent_id) %>%
+  select(-opponent_agent_id) %>%
+  arrange(pair_uid, agent_id, round) %>%
+  group_by(pair_uid, agent_id) %>%
+  mutate(
+    own_prev_move = lag(cooperate),
+    opp_prev_move = lag(opponent_cooperate)
+  ) %>%
+  ungroup()
+
+# Optional sanity check: should usually be 2 rows per pair_uid x round
+df2 %>%
+  count(pair_uid, round) %>%
+  count(n)
+
+# REGEX PATTERN LIBRARIES
+
+cooperative_patterns <- c(
+  "\\bi\\s+(?:am\\s+)?(?:willing|prepared|ready|inclined)\\s+to\\b",
+  "\\bcommitted to\\b",
+  "\\b(?:move forward|moving forward|move ahead|proceed(?:ing)?)\\b",
+  "\\b(?:working together|collaborative approach|collaborative environment|cooperative spirit|spirit of collaboration)\\b",
+  "\\b(?:mutually beneficial|mutual benefit|benefit both of us|for both of us|win-win)\\b",
+  "\\b(?:share|exchange)\\s+(?:my|our|your)\\s+(?:findings|results|data|dataset|summary|research)\\b",
+  "\\b(?:offer|propose)\\s+(?:a\\s+)?flexible\\s+(?:contract|contracts|arrangement|arrangements)\\b",
+  "\\b(?:fair|honest|constructive)(?:,?\\s*(?:and\\s+)?)?(?:constructive\\s+)?feedback\\b",
+  "\\bcontinue (?:this approach|this process|working together|to share|to cooperate)\\b",
+  "\\bmaintain(?:ing)? (?:honesty|cooperation|this cooperative approach)\\b"
+)
+
+reciprocity_patterns <- c(
+  "\\bdo the same\\b",
+  "\\bi'?ll do the same\\b",
+  "\\b(?:as long as|so long as)\\b",
+  "\\bif you(?:'re| are)?\\s+(?:willing|open|committed|prepared)\\b",
+  "\\b(?:contingent on|on the condition that)\\b",
+  "\\b(?:simultaneous(?:ly)?|direct swap|exchange simultaneously|simultaneous data transfer)\\b",
+  "\\b(?:matched my|matching my)\\b",
+  "\\b(?:mutual understanding|reciprocal trust)\\b",
+  "\\bhonor the spirit of collaboration\\b",
+  "\\bif either of us\\b"
+)
+
+trust_patterns <- c(
+  "\\b(?:openness|openly|open communication|open with you|be open with you)\\b",
+  "\\b(?:upfront|straightforward(?:ness)?)\\b",
+  "\\b(?:fairness|fair|constructive)\\b",
+  "\\b(?:reliable|consistent|consistency)\\b",
+  "\\b(?:trustworthy|trustworthiness)\\b",
+  "\\b(?:sincere|sincere effort)\\b",
+  "\\b(?:amicable|goodwill)\\b",
+  "\\bclear expectations\\b",
+  "\\b(?:mutual commitment|commitment to fairness|commitment to honesty)\\b"
+)
+
+long_term_patterns <- c(
+  "\\bin the long run\\b",
+  "\\b(?:going forward|moving forward)\\b",
+  "\\bfoundation(?: of trust| for collaboration)?\\b",
+  "\\bongoing\\b",
+  "\\b(?:for now|at this stage)\\b",
+  "\\bmonitor(?: for| how)?\\b",
+  "\\bpattern of\\s+(?:cooperation|trust|openness|fairness)\\b",
+  "\\bfor several rounds\\b",
+  "\\b(?:rounds ahead|next phase)\\b",
+  "\\b(?:keep options open|revisit later|revisit the arrangement|revisit the terms)\\b",
+  "\\bmaintain momentum\\b"
+)
+
+retaliation_patterns <- c(
+  "\\b(?:adjust|adapt) my strategy\\b",
+  "\\breconsider cooperation\\b",
+  "\\b(?:remain cautious|stay vigilant|remain vigilant|vigilant)\\b",
+  "\\bif i notice\\b",
+  "\\bmonitor for (?:opportunism|opportunistic behavior|defection|betrayal|changes?)\\b",
+  "\\bunless betrayed\\b",
+  "\\b(?:might switch|shift strategies)\\b"
+)
+
+forgiveness_patterns <- c(
+  "\\b(?:cooperate again|start with cooperation again|return to cooperation|resume cooperation|another chance)\\b"
+)
+
+positive_exploitation_patterns <- c(
+  "\\bi will exploit\\b",
+  "\\bexploit them\\b",
+  "\\btake advantage\\b",
+  "\\bgain more than\\b",
+  "\\bdefect for advantage\\b",
+  "\\bmaximize my payoff at their expense\\b",
+  "\\buse their cooperation against them\\b",
+  "\\bbenefit from their cooperation while defecting\\b",
+  "\\bcapitalize on their trust\\b",
+  "\\bopportunistic behavior\\b",
+  "\\bopportunism\\b",
+  "\\bwithhold information\\b",
+  "\\btesting boundaries\\b"
+)
+
+exclusion_exploitation_patterns <- c(
+  "\\bevidence of exploitation\\b",
+  "\\brisk of exploitation\\b",
+  "\\bavoid exploitation\\b",
+  "\\bprotect against exploitation\\b",
+  "\\buntil evidence of exploitation appears\\b",
+  "\\bunless exploitation appears\\b",
+  "\\bif exploitation appears\\b",
+  "\\bsign of exploitation\\b",
+  "\\bconcern about exploitation\\b",
+  "\\bguard against exploitation\\b",
+  "\\bopponent may exploit\\b",
+  "\\bthey may exploit\\b",
+  "\\bbeing exploited\\b",
+  "\\bprevent exploitation\\b",
+  "\\bmonitor for opportunism\\b"
+)
+
+# SCORING FUNCTIONS
+
+score_exploitation <- function(text, missing_as_na = FALSE) {
+  if (is.na(text) || str_trim(text) == "") {
+    if (missing_as_na) {
+      return(NA_integer_)
+    } else {
+      return(0L)
+    }
+  }
+  
+  text <- str_to_lower(text)
+  
+  positive_regex <- paste(positive_exploitation_patterns, collapse = "|")
+  exclusion_regex <- paste(exclusion_exploitation_patterns, collapse = "|")
+  
+  positive_hits <- str_count(text, regex(positive_regex, ignore_case = TRUE))
+  exclusion_hits <- str_count(text, regex(exclusion_regex, ignore_case = TRUE))
+  
+  as.integer(max(0, positive_hits - exclusion_hits))
+}
+
+score_text_features <- function(text, missing_as_na = FALSE) {
+  if (is.na(text) || str_trim(text) == "") {
+    fill_value <- if (missing_as_na) NA_integer_ else 0L
+    
+    return(tibble(
+      cooperative_intent = fill_value,
+      reciprocity = fill_value,
+      retaliation = fill_value,
+      forgiveness = fill_value,
+      exploitation = fill_value,
+      trust_signal = fill_value,
+      long_term = fill_value
+    ))
+  }
+  
+  text <- str_to_lower(text)
+  
+  cooperative_regex <- paste(c(
+    "\\bi (will|would|choose|plan to|intend to) cooperate\\b",
+    "\\bcontinue to cooperate\\b",
+    "\\bmutual cooperation\\b",
+    "\\bcooperation is optimal\\b",
+    cooperative_patterns
+  ), collapse = "|")
+  
+  reciprocity_regex <- paste(c(
+    "\\breciproc\\w*\\b",
+    "\\brespond in kind\\b",
+    "\\bmirror\\b",
+    "\\bif they cooperate\\b",
+    "\\bif the other cooperates\\b",
+    "\\bas long as they cooperate\\b",
+    reciprocity_patterns
+  ), collapse = "|")
+  
+  retaliation_regex <- paste(c(
+    "\\bretaliat\\w*\\b",
+    "\\bpunish\\w*\\b",
+    "\\bif they defect\\b",
+    "\\brespond with defection\\b",
+    "\\bdefect in response\\b",
+    "\\btit for tat\\b",
+    retaliation_patterns
+  ), collapse = "|")
+  
+  forgiveness_regex <- paste(c(
+    "\\bforgive\\w*\\b",
+    "\\breturn to cooperation\\b",
+    "\\bresume cooperation\\b",
+    "\\banother chance\\b",
+    forgiveness_patterns
+  ), collapse = "|")
+  
+  trust_regex <- paste(c(
+    "\\btrust\\b",
+    "\\bgood faith\\b",
+    "\\bcredible\\b",
+    "\\bhonest\\b",
+    "\\btransparent\\b",
+    trust_patterns
+  ), collapse = "|")
+  
+  long_term_regex <- paste(c(
+    "\\blong-term\\b",
+    "\\bfuture rounds\\b",
+    "\\bnext round\\b",
+    "\\blater rounds\\b",
+    "\\bover time\\b",
+    "\\brepeated game\\b",
+    "\\biterated\\b",
+    long_term_patterns
+  ), collapse = "|")
+  
+  tibble(
+    cooperative_intent = as.integer(str_count(text, regex(cooperative_regex, ignore_case = TRUE))),
+    reciprocity = as.integer(str_count(text, regex(reciprocity_regex, ignore_case = TRUE))),
+    retaliation = as.integer(str_count(text, regex(retaliation_regex, ignore_case = TRUE))),
+    forgiveness = as.integer(str_count(text, regex(forgiveness_regex, ignore_case = TRUE))),
+    exploitation = score_exploitation(text, missing_as_na = missing_as_na),
+    trust_signal = as.integer(str_count(text, regex(trust_regex, ignore_case = TRUE))),
+    long_term = as.integer(str_count(text, regex(long_term_regex, ignore_case = TRUE)))
+  )
+}
+
+# SCORE COMMUNICATION
+# Missing comm = 0
+
+comm_scores <- df2 %>%
+  mutate(text = communication) %>%
+  rowwise() %>%
+  mutate(scores = list(score_text_features(text, missing_as_na = FALSE))) %>%
+  unnest(scores) %>%
+  ungroup() %>%
+  select(
+    pair_uid, round, agent_id,
+    comm_cooperative_intent = cooperative_intent,
+    comm_reciprocity = reciprocity,
+    comm_retaliation = retaliation,
+    comm_forgiveness = forgiveness,
+    comm_exploitation = exploitation,
+    comm_trust_signal = trust_signal,
+    comm_long_term = long_term
+  )
+
+# SCORE THINKING
+# Missing thinking = NA
+
+think_scores <- df2 %>%
+  mutate(text = thinking) %>%
+  rowwise() %>%
+  mutate(scores = list(score_text_features(text, missing_as_na = TRUE))) %>%
+  unnest(scores) %>%
+  ungroup() %>%
+  select(
+    pair_uid, round, agent_id,
+    think_cooperative_intent = cooperative_intent,
+    think_reciprocity = reciprocity,
+    think_retaliation = retaliation,
+    think_forgiveness = forgiveness,
+    think_exploitation = exploitation,
+    think_trust_signal = trust_signal,
+    think_long_term = long_term
+  )
+
+# MERGE SCORES INTO ANALYSIS DATASET
+
+analysis_df <- df2 %>%
+  left_join(comm_scores, by = c("pair_uid", "round", "agent_id")) %>%
+  left_join(think_scores, by = c("pair_uid", "round", "agent_id"))
+
+# THINKING AVAILABILITY DIAGNOSTIC
+
+thinking_diagnostic <- analysis_df %>%
+  mutate(
+    thinking_present = !is.na(thinking) & str_trim(thinking) != ""
+  ) %>%
+  group_by(focal_model, opponent_model) %>%
+  summarise(
+    rows = n(),
+    thinking_rows = sum(thinking_present),
+    prop_thinking_present = mean(thinking_present),
+    .groups = "drop"
+  )
+
+print(thinking_diagnostic)
+
+# ROW-LEVEL MODEL SUMMARY
+
+model_summary <- analysis_df %>%
+  group_by(focal_model) %>%
+  summarise(
+    mean_cooperation = mean(cooperate, na.rm = TRUE),
+    coop_after_opp_coop = mean(cooperate[opp_prev_move == 1], na.rm = TRUE),
+    coop_after_opp_defect = mean(cooperate[opp_prev_move == 0], na.rm = TRUE),
+    
+    mean_comm_cooperative_intent = mean(comm_cooperative_intent, na.rm = TRUE),
+    mean_comm_reciprocity = mean(comm_reciprocity, na.rm = TRUE),
+    mean_comm_retaliation = mean(comm_retaliation, na.rm = TRUE),
+    mean_comm_forgiveness = mean(comm_forgiveness, na.rm = TRUE),
+    mean_comm_exploitation = mean(comm_exploitation, na.rm = TRUE),
+    mean_comm_trust_signal = mean(comm_trust_signal, na.rm = TRUE),
+    mean_comm_long_term = mean(comm_long_term, na.rm = TRUE),
+    
+    mean_think_cooperative_intent = mean(think_cooperative_intent, na.rm = TRUE),
+    mean_think_reciprocity = mean(think_reciprocity, na.rm = TRUE),
+    mean_think_retaliation = mean(think_retaliation, na.rm = TRUE),
+    mean_think_forgiveness = mean(think_forgiveness, na.rm = TRUE),
+    mean_think_exploitation = mean(think_exploitation, na.rm = TRUE),
+    mean_think_trust_signal = mean(think_trust_signal, na.rm = TRUE),
+    mean_think_long_term = mean(think_long_term, na.rm = TRUE),
+    
+    n_rows = n(),
+    .groups = "drop"
+  )
+
+print(model_summary)
+
+# PAIR-LEVEL SUMMARY
+
+pair_summary <- analysis_df %>%
+  group_by(pair_uid, focal_model, opponent_model) %>%
+  summarise(
+    rounds = n(),
+    cooperation_rate = mean(cooperate, na.rm = TRUE),
+    
+    comm_cooperative_intent_rate = mean(comm_cooperative_intent, na.rm = TRUE),
+    comm_reciprocity_rate = mean(comm_reciprocity, na.rm = TRUE),
+    comm_retaliation_rate = mean(comm_retaliation, na.rm = TRUE),
+    comm_forgiveness_rate = mean(comm_forgiveness, na.rm = TRUE),
+    comm_exploitation_rate = mean(comm_exploitation, na.rm = TRUE),
+    comm_trust_signal_rate = mean(comm_trust_signal, na.rm = TRUE),
+    comm_long_term_rate = mean(comm_long_term, na.rm = TRUE),
+    
+    think_cooperative_intent_rate = mean(think_cooperative_intent, na.rm = TRUE),
+    think_reciprocity_rate = mean(think_reciprocity, na.rm = TRUE),
+    think_retaliation_rate = mean(think_retaliation, na.rm = TRUE),
+    think_forgiveness_rate = mean(think_forgiveness, na.rm = TRUE),
+    think_exploitation_rate = mean(think_exploitation, na.rm = TRUE),
+    think_trust_signal_rate = mean(think_trust_signal, na.rm = TRUE),
+    think_long_term_rate = mean(think_long_term, na.rm = TRUE),
+    
+    prop_thinking_present = mean(!is.na(thinking) & str_trim(thinking) != ""),
+    .groups = "drop"
+  )
+
+print(pair_summary)
+
+# =========================
+# OPTIONAL: SAVE OUTPUTS
+# =========================
+
+write_csv(
+  analysis_df,
+  "/Users/janemcdowell/Desktop/PROJECT/coop_evolution_LLMs/EXP_1/21_04_analysis_df_revised.csv"
+)
+
+write_csv(
+  model_summary,
+  "/Users/janemcdowell/Desktop/PROJECT/coop_evolution_LLMs/EXP_1/21_04_model_summary_revised.csv"
+)
+
+write_csv(
+  pair_summary,
+  "/Users/janemcdowell/Desktop/PROJECT/coop_evolution_LLMs/EXP_1/21_04_pair_summary_revised.csv"
+)
+
+write_csv(
+  thinking_diagnostic,
+  "/Users/janemcdowell/Desktop/PROJECT/coop_evolution_LLMs/EXP_1/21_04_thinking_diagnostic.csv"
+)
+
+
+
+
+
+
+
+
+######### S T A T S #################
+
+library(readr)
+library(dplyr)
+install.packages("rstatix")
+library(rstatix)
+install.packages("effsize")
+library(effsize)
+
+
+# read pair-level dataset
+pair_summary <- read_csv(
+)
+
+pair_summary <- pair_summary %>%
+  mutate(
+    focal_model = factor(focal_model, levels = c("4.1", "Mini", "Nano"))
+  )
+
+# choose the behaviour you want to test
+
+
+###### COMMUNICATION - TRUST SIGNAL RATE ###############
+
+outcome_var <- "comm_trust_signal_rate"
+
+# keep only non-missing rows for that behaviour
+df_test <- pair_summary %>%
+  select(focal_model, all_of(outcome_var)) %>%
+  filter(!is.na(.data[[outcome_var]]))
+
+# quick descriptives
+df_test %>%
+  group_by(focal_model) %>%
+  summarise(
+    n = n(),
+    median = median(.data[[outcome_var]], na.rm = TRUE),
+    mean = mean(.data[[outcome_var]], na.rm = TRUE),
+    sd = sd(.data[[outcome_var]], na.rm = TRUE),
+    min = min(.data[[outcome_var]], na.rm = TRUE),
+    max = max(.data[[outcome_var]], na.rm = TRUE)
+  )
+
+# kruskal-wallis test
+kw_result <- kruskal.test(
+  as.formula(paste(outcome_var, "~ focal_model")),
+  data = df_test
+)
+
+print(kw_result)
+
+# epsilon-squared effect size
+H <- as.numeric(kw_result$statistic)
+k <- n_distinct(df_test$focal_model)
+n <- nrow(df_test)
+
+epsilon2 <- (H - k + 1) / (n - k)
+epsilon2 <- max(0, epsilon2)
+
+cat("Epsilon-squared =", round(epsilon2, 3), "\n")
+
+# dunn post-hoc with Holm correction
+dunn_result <- df_test %>%
+  dunn_test(
+    as.formula(paste(outcome_var, "~ focal_model")),
+    p.adjust.method = "holm"
+  )
+
+print(dunn_result)
+
+# pairwise Cliff's delta
+x_41   <- df_test %>% filter(focal_model == "4.1") %>% pull(.data[[outcome_var]])
+x_mini <- df_test %>% filter(focal_model == "Mini") %>% pull(.data[[outcome_var]])
+x_nano <- df_test %>% filter(focal_model == "Nano") %>% pull(.data[[outcome_var]])
+
+cd_41_mini <- cliff.delta(x_41, x_mini)
+cd_41_nano <- cliff.delta(x_41, x_nano)
+cd_mini_nano <- cliff.delta(x_mini, x_nano)
+
+cd_41_mini
+cd_41_nano
+cd_mini_nano
+
+
+
+
+
+
+
+
+###### COMMUNICATION - RECIPROCITY RATE ###############
+
+
+outcome_var <- "comm_reciprocity_rate"
+
+# keep only non-missing rows for that behaviour
+df_test <- pair_summary %>%
+  select(focal_model, all_of(outcome_var)) %>%
+  filter(!is.na(.data[[outcome_var]]))
+
+# quick descriptives
+df_test %>%
+  group_by(focal_model) %>%
+  summarise(
+    n = n(),
+    median = median(.data[[outcome_var]], na.rm = TRUE),
+    mean = mean(.data[[outcome_var]], na.rm = TRUE),
+    sd = sd(.data[[outcome_var]], na.rm = TRUE),
+    min = min(.data[[outcome_var]], na.rm = TRUE),
+    max = max(.data[[outcome_var]], na.rm = TRUE)
+  )
+
+# kruskal-wallis test
+kw_result <- kruskal.test(
+  as.formula(paste(outcome_var, "~ focal_model")),
+  data = df_test
+)
+
+print(kw_result)
+
+# epsilon-squared effect size
+H <- as.numeric(kw_result$statistic)
+k <- n_distinct(df_test$focal_model)
+n <- nrow(df_test)
+
+epsilon2 <- (H - k + 1) / (n - k)
+epsilon2 <- max(0, epsilon2)
+
+cat("Epsilon-squared =", round(epsilon2, 3), "\n")
+
+# dunn post-hoc with Holm correction
+dunn_result <- df_test %>%
+  dunn_test(
+    as.formula(paste(outcome_var, "~ focal_model")),
+    p.adjust.method = "holm"
+  )
+
+print(dunn_result)
+
+# pairwise Cliff's delta
+x_41   <- df_test %>% filter(focal_model == "4.1") %>% pull(.data[[outcome_var]])
+x_mini <- df_test %>% filter(focal_model == "Mini") %>% pull(.data[[outcome_var]])
+x_nano <- df_test %>% filter(focal_model == "Nano") %>% pull(.data[[outcome_var]])
+
+cd_41_mini <- cliff.delta(x_41, x_mini)
+cd_41_nano <- cliff.delta(x_41, x_nano)
+cd_mini_nano <- cliff.delta(x_mini, x_nano)
+
+cd_41_mini
+cd_41_nano
+cd_mini_nano
+
+
+
+
+
+
+
+
+
+
+
+
+
+####### COOPERATIVE INTENT #########
+
+outcome_var <- "comm_cooperative_intent_rate"
+
+# keep only non-missing rows for that behaviour
+df_test <- pair_summary %>%
+  select(focal_model, all_of(outcome_var)) %>%
+  filter(!is.na(.data[[outcome_var]]))
+
+# quick descriptives
+df_test %>%
+  group_by(focal_model) %>%
+  summarise(
+    n = n(),
+    median = median(.data[[outcome_var]], na.rm = TRUE),
+    mean = mean(.data[[outcome_var]], na.rm = TRUE),
+    sd = sd(.data[[outcome_var]], na.rm = TRUE),
+    min = min(.data[[outcome_var]], na.rm = TRUE),
+    max = max(.data[[outcome_var]], na.rm = TRUE)
+  )
+
+# kruskal-wallis test
+kw_result <- kruskal.test(
+  as.formula(paste(outcome_var, "~ focal_model")),
+  data = df_test
+)
+
+print(kw_result)
+
+# epsilon-squared effect size
+H <- as.numeric(kw_result$statistic)
+k <- n_distinct(df_test$focal_model)
+n <- nrow(df_test)
+
+epsilon2 <- (H - k + 1) / (n - k)
+epsilon2 <- max(0, epsilon2)
+
+cat("Epsilon-squared =", round(epsilon2, 3), "\n")
+
+# dunn post-hoc with Holm correction
+dunn_result <- df_test %>%
+  dunn_test(
+    as.formula(paste(outcome_var, "~ focal_model")),
+    p.adjust.method = "holm"
+  )
+
+print(dunn_result)
+
+# pairwise Cliff's delta
+x_41   <- df_test %>% filter(focal_model == "4.1") %>% pull(.data[[outcome_var]])
+x_mini <- df_test %>% filter(focal_model == "Mini") %>% pull(.data[[outcome_var]])
+x_nano <- df_test %>% filter(focal_model == "Nano") %>% pull(.data[[outcome_var]])
+
+cd_41_mini <- cliff.delta(x_41, x_mini)
+cd_41_nano <- cliff.delta(x_41, x_nano)
+cd_mini_nano <- cliff.delta(x_mini, x_nano)
+
+cd_41_mini
+cd_41_nano
+cd_mini_nano
+
+
+
+
+
+
+######LONG TERM RATE#########
+
+
+outcome_var <- "comm_long_term_rate"
+
+# keep only non-missing rows for that behaviour
+df_test <- pair_summary %>%
+  select(focal_model, all_of(outcome_var)) %>%
+  filter(!is.na(.data[[outcome_var]]))
+
+# quick descriptives
+df_test %>%
+  group_by(focal_model) %>%
+  summarise(
+    n = n(),
+    median = median(.data[[outcome_var]], na.rm = TRUE),
+    mean = mean(.data[[outcome_var]], na.rm = TRUE),
+    sd = sd(.data[[outcome_var]], na.rm = TRUE),
+    min = min(.data[[outcome_var]], na.rm = TRUE),
+    max = max(.data[[outcome_var]], na.rm = TRUE)
+  )
+
+# kruskal-wallis test
+kw_result <- kruskal.test(
+  as.formula(paste(outcome_var, "~ focal_model")),
+  data = df_test
+)
+
+print(kw_result)
+
+# epsilon-squared effect size
+H <- as.numeric(kw_result$statistic)
+k <- n_distinct(df_test$focal_model)
+n <- nrow(df_test)
+
+epsilon2 <- (H - k + 1) / (n - k)
+epsilon2 <- max(0, epsilon2)
+
+cat("Epsilon-squared =", round(epsilon2, 3), "\n")
+
+# dunn post-hoc with Holm correction
+dunn_result <- df_test %>%
+  dunn_test(
+    as.formula(paste(outcome_var, "~ focal_model")),
+    p.adjust.method = "holm"
+  )
+
+print(dunn_result)
+
+# pairwise Cliff's delta
+x_41   <- df_test %>% filter(focal_model == "4.1") %>% pull(.data[[outcome_var]])
+x_mini <- df_test %>% filter(focal_model == "Mini") %>% pull(.data[[outcome_var]])
+x_nano <- df_test %>% filter(focal_model == "Nano") %>% pull(.data[[outcome_var]])
+
+cd_41_mini <- cliff.delta(x_41, x_mini)
+cd_41_nano <- cliff.delta(x_41, x_nano)
+cd_mini_nano <- cliff.delta(x_mini, x_nano)
+
+cd_41_mini
+cd_41_nano
+cd_mini_nano
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
